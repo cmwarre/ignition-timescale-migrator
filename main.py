@@ -354,9 +354,7 @@ def import_data_file(conn, backupdir, file):
 
     with open(os.path.join(backupdir, file)) as f:
         reader = csv.reader(f)
-        columns = next(reader)
         table = "sqlth_1_data"
-        # cur.copy_from(f, table, columns=tuple(columns), sep=",", null="")
         cur.copy_expert("COPY {table} from stdin with (FORMAT CSV)".format(table=table), f)
 
     conn.commit()
