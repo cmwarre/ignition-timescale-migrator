@@ -1,19 +1,22 @@
 #!/usr/bin/python
 import csv
 import os
-import sys
 import threading
 
 import mysql.connector
 import numpy
-import psycopg2
+import psycopg
 from optparse import OptionParser
 
 
-def main(argv):
+def main():
+    """
+    Exports tables from a MySQL based Ignition historian and imports them into a TimescaleDB instance
+    """
+
     # Setup command line argument parsing
     usage = "usage: %prog [options] action"
-    parser = OptionParser(usage=usage)
+    parser = OptionParser(description=main.__doc__, usage=usage)
     parser.add_option("-u", "--user", dest="username", help="MySQL Username")
     parser.add_option("-p", "--password", dest="password", help="MySQL Password")
     parser.add_option("-H", "--host", dest="host", help="MySQL Host Address")
@@ -51,21 +54,19 @@ def main(argv):
     # end if
 
 
-# end def
-
 # <editor-fold desc="Export">
-
 
 def export_data(host, database, username, password, backupdir, compress=False, threads=1):
     """
-    :param threads:
-    :param compress:
-    :param host:
-    :param database:
-    :param username:
-    :param password:
-    :param backupdir:
-    :return:
+    Exports data from a mysql database to a specified directory
+    :param threads: number of threads to utilize
+    :param compress: compress the data
+    :param host: MySQL host
+    :param database: MySQL Database
+    :param username: MySQL Username
+    :param password: MySQL Password
+    :param backupdir: Backup Directory
+    :return: None
     """
 
     # Connect to MySQL
@@ -91,9 +92,8 @@ def export_data(host, database, username, password, backupdir, compress=False, t
     # table to record the backup.
     table_groups = numpy.array_split(tables, threads)
     thread_pool = [threading.Thread(target=dump_tables,
-                                    args=(
-                                        table_groups[i], host, database, username, password, backupdir,
-                                        latest_partition))
+                                    args=(table_groups[i], host, database, username, password, backupdir,
+                                          latest_partition))
                    for i in range(threads)]
 
     for thread in thread_pool:
@@ -107,10 +107,15 @@ def export_data(host, database, username, password, backupdir, compress=False, t
         os.system("rm -r %s" % backupdir)
 
 
-# end def
-
-
 def verify_backup_table(db, con, database):
+    """
+    Verify that the sqlth_backups table exists in the MySQL historian database and creates if it not
+    :param db: Database Connection
+    :param con: Database connection cursor
+    :param database: Database Name
+    :return: None
+    """
+
     # Check if the backups table exists.
     query = "SHOW TABLES WHERE tables_in_{0} = 'sqlth_backups';".format(database)
 
@@ -134,10 +139,12 @@ def verify_backup_table(db, con, database):
     # end if
 
 
-# end def
-
-
 def get_latest_partition(con):
+    """
+    Returns the name of the latest partition in an Ignition historian database
+    :param con: MySQL Connection Cursor
+    :return String: name of the latest partition in a database
+    """
     # Select the current history partition to avoid backing that up.
     query = """
     SELECT
@@ -151,10 +158,14 @@ def get_latest_partition(con):
     return con.fetchall()[0][0]
 
 
-# end def
-
-
 def get_tables(con, database):
+    """
+    Return a list of table names from a MySQL database
+    :param con: MySQL connection
+    :param database: MySQL database name
+    :return List: list of strings with table names
+    """
+
     # Select misc history tables and history partitions that haven't been backed up yet
     query = """
             SHOW TABLES WHERE 
@@ -174,6 +185,17 @@ def get_tables(con, database):
 
 
 def dump_tables(tables, host, database, username, password, backupdir, latest_partition):
+    """
+    creates a connection to MYSQL, spawns threads and has each begin exporting Mysql table data to .csv files
+    :param tables: list of tables to dump
+    :param host: MySQL host
+    :param database: MySQL database name
+    :param username: MySQL user
+    :param password: MySQL password
+    :param backupdir: Directory to dump mysql data .csv files
+    :param latest_partition: Last partition in the table (to be avoided because it could be being written to)
+    :return: None
+    """
     print("Dumping tables {0}".format(str(tables)))
     # Connect to MySQL
     db = mysql.connector.connect(
@@ -187,7 +209,7 @@ def dump_tables(tables, host, database, username, password, backupdir, latest_pa
 
     for table in tables:
         if table != latest_partition:
-            dump_table_to_csv(con, table, host, database, username, password, backupdir)
+            dump_table_to_csv(con, table, backupdir)
     # end for
 
     # Commit and close the database connection
@@ -196,20 +218,13 @@ def dump_tables(tables, host, database, username, password, backupdir, latest_pa
     db.close()
 
 
-# end def
-
-
-def dump_table_to_csv(con, table, host, database, username, password, backupdir):
+def dump_table_to_csv(con, table, backupdir):
     """
     Dump a mysql table to a csv file and a structure .sql file
-    :param con:
-    :param table:
-    :param host:
-    :param database:
-    :param username:
-    :param password:
-    :param backupdir:
-    :return:
+    :param con: MySQL connection to use
+    :param table: Table name to dump data for
+    :param backupdir: Directory to store backup files
+    :return: None
     """
     print("Exporting " + table)
 
@@ -239,8 +254,6 @@ def dump_table_to_csv(con, table, host, database, username, password, backupdir)
     con.execute(query)
 
 
-# end def
-
 # </editor-fold>
 
 # <editor-fold desc="Import">
@@ -248,20 +261,36 @@ def dump_table_to_csv(con, table, host, database, username, password, backupdir)
 
 def import_data(host, database, username, password, backupdir, compress, threads,
                 chunk_size_days, compress_after_days, retain_days):
+    """
+    Import data into TimescaleDB database
+    :param host:
+    :param database:
+    :param username:
+    :param password:
+    :param backupdir:
+    :param compress:
+    :param threads:
+    :param chunk_size_days:
+    :param compress_after_days:
+    :param retain_days:
+    :return:
+    """
 
-    connection_string = "dbname={database} user={username} password={password} host={host} port=5432 sslmode=require".format(
+    con_string = "dbname={database} user={username} password={password} host={host} port=5432 sslmode=require".format(
         database=database,
         username=username,
         password=password,
         host=host
     )
 
+    # todo handle file compression
+
     # todo gracefully fail at creating tables
     print("Creating tables in database: {}".format(database))
-    create_tables(connection_string, chunk_size_days, compress_after_days, retain_days)
+    create_tables(con_string, chunk_size_days, compress_after_days, retain_days)
     tables = get_list_of_exported_tables(backupdir)
     table_groups = numpy.array_split(tables, threads)
-    thread_pool = [threading.Thread(target=import_tables, args=(connection_string, table_groups[i], backupdir))
+    thread_pool = [threading.Thread(target=import_tables, args=(con_string, table_groups[i], backupdir))
                    for i in range(threads)]
 
     for thread in thread_pool:
@@ -271,12 +300,17 @@ def import_data(host, database, username, password, backupdir, compress, threads
     print("Recreating partition tables")
 
 
-# end def
-
-
 def create_tables(connection_string, chunk_size_days, compress_after_days, retain_days):
+    """
+    Generate ignition historian tables in PostgreSQL
 
-    with psycopg2.connect(connection_string) as conn:
+    :param connection_string: postgresql connection string
+    :param chunk_size_days: TimescaleDB chunk size in days
+    :param compress_after_days: TimescaleDB compress after days
+    :param retain_days: TimescaleDB prune after days
+    :return: None
+    """
+    with psycopg.connect(connection_string) as conn:
         cur = conn.cursor()
         try:
             with open("postgres_tables.sql", 'r') as sqlfile:
@@ -289,9 +323,11 @@ def create_tables(connection_string, chunk_size_days, compress_after_days, retai
 
     print("Setting up hypertable")
     queries = [
-        "SELECT create_hypertable('sqlth_1_data', 't_stamp', chunk_time_interval=>{}, migrate_data=>true);".format(int(chunk_size_days * 86400000)),
+        "SELECT create_hypertable('sqlth_1_data', 't_stamp', chunk_time_interval=>{}, migrate_data=>true);".format(
+            int(chunk_size_days * 86400000)),
         "ALTER TABLE sqlth_1_data set(timescaledb.compress, timescaledb.compress_segmentby = 'tagid');",
-        "CREATE OR REPLACE FUNCTION unix_now() returns BIGINT LANGUAGE SQL STABLE as $$ SELECT 1000*extract(epoch from now())::BIGINT $$;",
+        """CREATE OR REPLACE FUNCTION unix_now() returns BIGINT LANGUAGE SQL STABLE as $$ 
+        SELECT 1000*extract(epoch from now())::BIGINT $$;""",
         "SELECT set_integer_now_func('sqlth_1_data', 'unix_now');",
         "SELECT add_compression_policy('sqlth_1_data', {});".format(int(compress_after_days * 86400000)),
     ]
@@ -302,21 +338,27 @@ def create_tables(connection_string, chunk_size_days, compress_after_days, retai
     cur.execute("\n".join(queries))
     conn.commit()
 
-# end def
-
 
 def get_list_of_exported_tables(backupdir):
+    """
+    List exported MySQL tables from the backup directory
+    :param backupdir: path to the MySQL backup directory
+    :return: List of strings for exported tables in a backup directory
+    """
     onlyfiles = [f for f in os.listdir(backupdir) if os.path.isfile(os.path.join(backupdir, f))]
-    print(onlyfiles)
     return onlyfiles
 
 
-# end def
-
-
 def import_tables(connection_string, tables, backupdir):
+    """
+    Import table data for each export in the mysql backup directory into PostgreSQL
+    :param connection_string: PostgreSQL connection string
+    :param tables: list of tables to import
+    :param backupdir: directory of MySQL backup
+    :return: None
+    """
     import re
-    with psycopg2.connect(connection_string) as conn:
+    with psycopg.connect(connection_string) as conn:
 
         for table in tables:
             if match := re.search(r"sqlt(h)?_(\d+|data)_(\d+)?(_)?(.*)", table):
@@ -325,13 +367,16 @@ def import_tables(connection_string, tables, backupdir):
             else:
                 print("Importing meta file {}".format(table))
                 import_meta_file(conn, backupdir, table)
-        # end for
-
-
-# end def
 
 
 def import_meta_file(conn, backupdir, file):
+    """
+    Import meta information table files
+    :param conn: postgresql connection cursor
+    :param backupdir: MySQL backup directory
+    :param file: filepath to import
+    :return: None
+    """
     try:
         cur = conn.cursor()
 
@@ -340,30 +385,32 @@ def import_meta_file(conn, backupdir, file):
             columns = next(reader)
             table = file.replace(".csv", "")
             cur.copy_from(f, table, columns=tuple(columns), sep=",", null="")
-    except:
+    except Exception as e:
+        print(e)
         pass
 
         conn.commit()
 
 
-# end def
-
-
 def import_data_file(conn, backupdir, file):
+    """
+    Import csv data to postgresql from a provided filepath
+    :param conn: TimescaleDB Database Connection
+    :param backupdir: MySQL Backup Directory
+    :param file: File name to import
+    :return: None
+    """
     cur = conn.cursor()
 
     with open(os.path.join(backupdir, file)) as f:
-        reader = csv.reader(f)
         table = "sqlth_1_data"
         cur.copy_expert("COPY {table} from stdin with (FORMAT CSV)".format(table=table), f)
 
     conn.commit()
 
 
-# end def
-
 # </editor-fold>
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    main()
