@@ -1,7 +1,7 @@
 backports.zoneinfo==0.2.1
-mysql-connector-python==8.0.25
-numpy==1.20.3
+mysql-connector-python==8.0.28
+numpy==1.22.1
 optparse-pretty==0.1.1
-protobuf==3.17.0
+protobuf==3.19.3
 psycopg==3.0.8
 six==1.16.0
